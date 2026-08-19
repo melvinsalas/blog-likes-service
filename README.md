@@ -31,10 +31,11 @@ Adds a like for the current visitor and returns the updated count.
 { "liked": true, "count": 1 }
 ```
 
-`postId` can be either a slug or a path. The API normalizes paths into safe IDs by lowercasing them, trimming leading/trailing slashes, and replacing `/` with `-`.
+`postId` can be a slug, a namespaced ID using `:`, or a path. The API normalizes paths into safe IDs by lowercasing them, trimming leading/trailing slashes, and replacing `/` with `-`.
 
 ```txt
 my-first-post          -> my-first-post
+blog:my-first-post     -> blog:my-first-post
 /blog/hola-archive    -> blog-hola-archive
 blog/2026/hello-world -> blog-2026-hello-world
 ```

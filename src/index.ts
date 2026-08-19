@@ -10,7 +10,7 @@ type AppEnv = Env & {
 };
 
 // Normalize paths into simple postId values to avoid ambiguous routes or odd input.
-const POST_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,118}[a-z0-9])?$/;
+const POST_ID_PATTERN = /^[a-z0-9](?:[a-z0-9:-]{0,118}[a-z0-9])?$/;
 const API_ROUTE_PATTERN = /^\/api\/likes\/(.+)$/;
 const ALLOWED_METHODS = 'GET, POST, OPTIONS';
 
