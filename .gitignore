@@ -1,0 +1,13 @@
+node_modules/
+package-lock.json
+.wrangler/
+worker-configuration.d.ts
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+Thumbs.db

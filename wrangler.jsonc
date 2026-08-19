@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "blog-likes-service",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-19",
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "ALLOWED_ORIGINS": "http://localhost:4321,https://blog-a5r.pages.dev"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "blog-likes",
+      "database_id": "6921a28d-ace3-4aa9-8587-960af7deb68f",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
