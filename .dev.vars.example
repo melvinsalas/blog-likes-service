@@ -1,1 +1,2 @@
 SECRET_SALT=change-me-for-local-dev
+ALLOWED_ORIGINS=http://localhost:4321

@@ -6,9 +6,7 @@
   "observability": {
     "enabled": true
   },
-  "vars": {
-    "ALLOWED_ORIGINS": "http://localhost:4321,https://blog-a5r.pages.dev"
-  },
+  "keep_vars": true,
   "d1_databases": [
     {
       "binding": "DB",

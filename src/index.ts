@@ -1,6 +1,9 @@
 import { SQL } from './sql';
 
 type AppEnv = Env & {
+	// ALLOWED_ORIGINS is configured outside wrangler.jsonc so deployments can
+	// keep Dashboard-managed variables.
+	ALLOWED_ORIGINS?: string;
 	// SECRET_SALT is a Wrangler secret. It is optional here so the Worker can
 	// return a clear error if it is missing locally or in production.
 	SECRET_SALT?: string;
@@ -92,7 +95,8 @@ function getPostId(url: URL) {
 }
 
 function getAllowedOrigins(env: AppEnv) {
-	return env.ALLOWED_ORIGINS.split(',')
+	return (env.ALLOWED_ORIGINS ?? '')
+		.split(',')
 		.map((origin) => origin.trim())
 		.filter(Boolean);
 }

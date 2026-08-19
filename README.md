@@ -57,8 +57,8 @@ The `POST` endpoint uses an idempotent insert, so enthusiastic clicking does not
 src/index.ts                  Worker request handling, CORS, hashing, D1 calls
 src/sql.ts                    SQL statements used by the Worker
 migrations/0001_create_likes.sql
-wrangler.jsonc                Worker, D1 binding, and non-secret config
-.dev.vars.example             Local secret example
+wrangler.jsonc                Worker, D1 binding, and deploy config
+.dev.vars.example             Local variables example
 ```
 
 ## Configuration
@@ -68,15 +68,17 @@ Most of the important knobs live in `wrangler.jsonc`:
 - Worker name: `blog-likes-service`
 - D1 binding: `DB`
 - D1 database: `blog-likes`
-- Allowed browser origins: `ALLOWED_ORIGINS`
+- Dashboard-managed variables are preserved with `keep_vars: true`
 
-Update `ALLOWED_ORIGINS` when your site URL changes. CORS is intentionally strict here:
+`ALLOWED_ORIGINS` is intentionally kept out of `wrangler.jsonc`. Set it in Cloudflare Dashboard so changing your site URL does not require a code change:
 
-```jsonc
-"vars": {
-  "ALLOWED_ORIGINS": "http://localhost:4321,https://your-blog.example.com"
-}
+```txt
+Worker > Settings > Variables & Secrets > Add variable
+Name: ALLOWED_ORIGINS
+Value: https://your-site.example.com
 ```
+
+Use a comma-separated list if you need more than one origin, for example `http://localhost:4321,https://your-site.example.com`.
 
 For production, configure the secret once:
 
