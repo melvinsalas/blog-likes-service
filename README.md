@@ -31,7 +31,15 @@ Adds a like for the current visitor and returns the updated count.
 { "liked": true, "count": 1 }
 ```
 
-`postId` should be a stable slug made of lowercase letters, numbers, and hyphens. Use something boring and permanent, like `my-first-post`, not a display title that might change next week.
+`postId` can be either a slug or a path. The API normalizes paths into safe IDs by lowercasing them, trimming leading/trailing slashes, and replacing `/` with `-`.
+
+```txt
+my-first-post          -> my-first-post
+/blog/hola-archive    -> blog-hola-archive
+blog/2026/hello-world -> blog-2026-hello-world
+```
+
+Use something stable and permanent, not a display title that might change next week.
 
 ## How It Works
 
@@ -114,10 +122,16 @@ Start the Worker locally:
 npm run dev
 ```
 
-Try the endpoint:
+Try the endpoint with a slug:
 
 ```sh
 curl http://localhost:8787/api/likes/example-post
+```
+
+Or with a path:
+
+```sh
+curl http://localhost:8787/api/likes/blog/hola-archive
 ```
 
 ## Deployment
@@ -158,7 +172,7 @@ Use browser-side `fetch` with `credentials: 'omit'`. Treat this service as optio
 
 ```ts
 const likesApi = 'https://blog-likes-service.<your-subdomain>.workers.dev';
-const postId = 'example-post';
+const postId = location.pathname;
 
 export async function getLikes() {
 	try {

@@ -9,9 +9,9 @@ type AppEnv = Env & {
 	SECRET_SALT?: string;
 };
 
-// Accept only simple slugs as postId values to avoid ambiguous routes or odd input.
+// Normalize paths into simple postId values to avoid ambiguous routes or odd input.
 const POST_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,118}[a-z0-9])?$/;
-const API_ROUTE_PATTERN = /^\/api\/likes\/([^/]+)\/?$/;
+const API_ROUTE_PATTERN = /^\/api\/likes\/(.+)$/;
 const ALLOWED_METHODS = 'GET, POST, OPTIONS';
 
 export default {
@@ -79,17 +79,22 @@ export default {
 } satisfies ExportedHandler<AppEnv>;
 
 function getPostId(url: URL) {
-	const rawPostId = url.pathname.match(API_ROUTE_PATTERN)?.[1];
+	const rawPostId = url.pathname.match(API_ROUTE_PATTERN)?.[1]?.replace(/\/+$/, '');
 
 	if (!rawPostId) return undefined;
 
-	let postId: string;
+	let decodedPostId: string;
 
 	try {
-		postId = decodeURIComponent(rawPostId);
+		decodedPostId = decodeURIComponent(rawPostId);
 	} catch {
 		return undefined;
 	}
+
+	const postId = decodedPostId
+		.toLowerCase()
+		.replace(/^\/+|\/+$/g, '')
+		.replaceAll('/', '-');
 
 	return POST_ID_PATTERN.test(postId) ? postId : undefined;
 }
