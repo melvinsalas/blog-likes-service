@@ -1,2 +1,5 @@
 SECRET_SALT=change-me-for-local-dev
 ALLOWED_ORIGINS=http://localhost:4321
+TURNSTILE_SECRET_KEY=turnstile-secret-for-local-development
+COMMENTS_EMAIL_FROM=comments@your-domain.example
+COMMENTS_EMAIL_TO=you@example.com

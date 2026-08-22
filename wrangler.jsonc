@@ -7,6 +7,11 @@
     "enabled": true
   },
   "keep_vars": true,
+  "send_email": [
+    {
+      "name": "COMMENTS_EMAIL"
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",

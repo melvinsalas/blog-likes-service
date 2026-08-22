@@ -1,6 +1,7 @@
 import { SQL } from './sql';
+import { submitComment, type CommentsEnv } from './comments';
 
-type AppEnv = Env & {
+type AppEnv = Env & CommentsEnv & {
 	// ALLOWED_ORIGINS is configured outside wrangler.jsonc so deployments can
 	// keep Dashboard-managed variables.
 	ALLOWED_ORIGINS?: string;
@@ -11,7 +12,8 @@ type AppEnv = Env & {
 
 // Normalize paths into simple postId values to avoid ambiguous routes or odd input.
 const POST_ID_PATTERN = /^[a-z0-9](?:[a-z0-9:-]{0,118}[a-z0-9])?$/;
-const API_ROUTE_PATTERN = /^\/api\/likes\/(.+)$/;
+const LIKES_API_ROUTE_PATTERN = /^\/api\/likes\/(.+)$/;
+const COMMENTS_API_ROUTE_PATTERN = /^\/api\/comments\/(.+)$/;
 const ALLOWED_METHODS = 'GET, POST, OPTIONS';
 
 export default {
@@ -29,7 +31,20 @@ export default {
 			}
 
 			const url = new URL(request.url);
-			const postId = getPostId(url);
+			const commentContentId = getContentId(url, COMMENTS_API_ROUTE_PATTERN);
+
+			if (commentContentId) {
+				if (request.method !== 'POST') {
+					return jsonResponse(request, allowedOrigins, { error: 'Method not allowed' }, 405, {
+						Allow: 'POST, OPTIONS',
+					});
+				}
+
+				const result = await submitComment(request, env, commentContentId);
+				return jsonResponse(request, allowedOrigins, result.body, result.status);
+			}
+
+			const postId = getContentId(url, LIKES_API_ROUTE_PATTERN);
 
 			if (!postId) {
 				return jsonResponse(request, allowedOrigins, { error: 'Not found' }, 404);
@@ -78,8 +93,8 @@ export default {
 	},
 } satisfies ExportedHandler<AppEnv>;
 
-function getPostId(url: URL) {
-	const rawPostId = url.pathname.match(API_ROUTE_PATTERN)?.[1]?.replace(/\/+$/, '');
+function getContentId(url: URL, routePattern: RegExp) {
+	const rawPostId = url.pathname.match(routePattern)?.[1]?.replace(/\/+$/, '');
 
 	if (!rawPostId) return undefined;
 
