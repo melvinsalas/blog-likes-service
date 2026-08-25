@@ -215,7 +215,9 @@ Likes preserve the existing yearly visitor fingerprint behavior: the active like
 
 ### D1 Schema
 
-Apply the D1 schema manually:
+Migration `0002_create_content_stats.sql` renames the old `likes` table to `legacy_likes`, creates the new tables, backfills permanent like counters from legacy rows, and seeds like dedupe rows from the legacy visitor hashes.
+
+The new base schema is:
 
 ```sql
 CREATE TABLE IF NOT EXISTS content_stats (
@@ -245,6 +247,12 @@ CREATE INDEX IF NOT EXISTS idx_visit_dedupe_expires_at
 ON visit_dedupe(expires_at);
 ```
 
+The migration keeps legacy data in:
+
+```txt
+legacy_likes
+```
+
 ## Project Structure
 
 ```txt
@@ -254,6 +262,7 @@ src/email.ts                  Email formatting and Cloudflare Email Service call
 src/turnstile.ts              Server-side Turnstile validation
 src/sql.ts                    SQL statements used by the Worker
 migrations/0001_create_likes.sql
+migrations/0002_create_content_stats.sql
 wrangler.jsonc                Worker, D1 binding, and deploy config
 .dev.vars.example             Local variables example
 ```
