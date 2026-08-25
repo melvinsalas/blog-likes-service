@@ -8,8 +8,9 @@ The API stores likes in Cloudflare D1 and delivers comment submissions directly 
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| `GET` | `/api/likes/:contentId` | Returns the like count and whether the current visitor has liked the content. |
-| `POST` | `/api/likes/:contentId` | Records one like from the current visitor and returns the updated count. |
+| `GET` | `/api/stats/` | Returns all permanent like and visit counters. |
+| `GET` | `/api/stats/:contentId` | Records one deduped visit and returns counters for the content item. |
+| `POST` | `/api/like/:contentId` | Records one like from the current visitor and returns updated counters. |
 | `POST` | `/api/comments/:contentId` | Validates a comment and emails it with a Markdown block ready to paste into the post. |
 | `OPTIONS` | `/api/*` | Handles browser CORS preflight requests. |
 
@@ -36,13 +37,13 @@ blog/2026/hello-world  -> blog-2026-hello-world
 
 ## Endpoint Specification
 
-### Get Like State
+### Get All Stats
 
 ```http
-GET /api/likes/:contentId
+GET /api/stats/
 ```
 
-Returns the current number of likes and whether the requesting visitor has already liked the content. The request has no body.
+Returns all permanent content counters. This endpoint does not create a visitor fingerprint and does not record a visit.
 
 #### Successful response
 
@@ -50,30 +51,23 @@ Status: `200 OK`
 
 ```json
 {
-  "liked": false,
-  "count": 12
+  "stats": [
+    {
+      "contentId": "blog:post-1",
+      "likes": 532,
+      "visits": 8120
+    }
+  ]
 }
 ```
 
-| Field | Type | Description |
-| --- | --- | --- |
-| `liked` | `boolean` | Whether the current visitor has liked this content. |
-| `count` | `number` | Total number of recorded likes. |
-
-#### Errors
-
-- `400` if the visitor address is unavailable.
-- `403` if the browser origin is not allowed.
-- `404` if `contentId` is missing or invalid.
-- `500` if the likes service is not configured or D1 fails.
-
-### Add Like
+### Get Content Stats
 
 ```http
-POST /api/likes/:contentId
+GET /api/stats/:contentId
 ```
 
-Records a like from the current visitor. It is idempotent: submitting the same like again does not increase the count. The request has no body.
+Records one deduped visit from the current visitor, then returns permanent counters and whether the requesting visitor has already liked the content.
 
 #### Successful response
 
@@ -81,15 +75,12 @@ Status: `200 OK`
 
 ```json
 {
-  "liked": true,
-  "count": 13
+  "contentId": "blog:post-1",
+  "likes": 532,
+  "visits": 8120,
+  "liked": true
 }
 ```
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `liked` | `boolean` | Always `true` after a successful request. |
-| `count` | `number` | Updated total number of likes. |
 
 #### Errors
 
@@ -97,7 +88,28 @@ Status: `200 OK`
 - `403` if the browser origin is not allowed.
 - `404` if `contentId` is missing or invalid.
 - `405` if the endpoint receives an unsupported HTTP method.
-- `500` if the likes service is not configured or D1 fails.
+- `500` if the service is not configured or D1 fails.
+
+### Add Like
+
+```http
+POST /api/like/:contentId
+```
+
+Records a like from the current visitor. It is idempotent while the like dedupe record is active: submitting the same like again does not increase the count.
+
+#### Successful response
+
+Status: `200 OK`
+
+```json
+{
+  "contentId": "blog:post-1",
+  "likes": 533,
+  "visits": 8120,
+  "liked": true
+}
+```
 
 ### Submit Comment
 
@@ -189,13 +201,49 @@ IP + UTC year + SECRET_SALT
 
 That hash becomes the visitor identifier for deduplication. The current UTC year is included so the identifier rotates yearly. `SECRET_SALT` must be configured as a Wrangler secret and must not be committed. Seriously: no secret sauce in Git.
 
-Likes are stored in D1 with this unique key:
+Interactions are deduped in D1 with this unique key:
 
 ```txt
-post_id + visitor_hash
+content_id + fingerprint
 ```
 
-The `POST` endpoint uses an idempotent insert, so enthusiastic clicking does not create duplicate likes.
+The permanent counters live in `content_stats`. Fingerprints live in `like_dedupe` and `visit_dedupe` only while they are useful for deduplication. Public counters are never calculated with `COUNT(*)` over fingerprint rows, so deleting expired dedupe records does not lower historical likes or visits.
+
+The `POST` endpoints use a D1 batch transaction and the dedupe table primary key to make duplicate submissions idempotent. The Worker deletes the expired dedupe row for the current fingerprint, inserts the new dedupe claim with `INSERT OR IGNORE`, and increments the permanent counter by SQLite `changes()` from that claim. Only a request that inserts the dedupe claim increments the counter.
+
+Likes preserve the existing yearly visitor fingerprint behavior: the active like dedupe row expires at the start of the next UTC year. Visits use a 24-hour dedupe window.
+
+### D1 Schema
+
+Apply the D1 schema manually:
+
+```sql
+CREATE TABLE IF NOT EXISTS content_stats (
+	content_id TEXT PRIMARY KEY,
+	likes INTEGER NOT NULL DEFAULT 0,
+	visits INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS like_dedupe (
+	content_id TEXT NOT NULL,
+	fingerprint TEXT NOT NULL,
+	expires_at INTEGER NOT NULL,
+	PRIMARY KEY (content_id, fingerprint)
+);
+
+CREATE TABLE IF NOT EXISTS visit_dedupe (
+	content_id TEXT NOT NULL,
+	fingerprint TEXT NOT NULL,
+	expires_at INTEGER NOT NULL,
+	PRIMARY KEY (content_id, fingerprint)
+);
+
+CREATE INDEX IF NOT EXISTS idx_like_dedupe_expires_at
+ON like_dedupe(expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_visit_dedupe_expires_at
+ON visit_dedupe(expires_at);
+```
 
 ## Project Structure
 
@@ -295,13 +343,13 @@ npm run dev
 Try the endpoint with a slug:
 
 ```sh
-curl http://localhost:8787/api/likes/example-post
+curl http://localhost:8787/api/stats/example-post
 ```
 
 Or with a path:
 
 ```sh
-curl http://localhost:8787/api/likes/blog/hola-archive
+curl http://localhost:8787/api/stats/blog/hola-archive
 ```
 
 Try a comment submission after filling the local variables:
@@ -352,22 +400,22 @@ Use browser-side `fetch` with `credentials: 'omit'`. Treat this service as optio
 const blogApi = 'https://blog-likes-service.<your-subdomain>.workers.dev';
 const postId = location.pathname;
 
-export async function getLikes() {
+export async function getStats() {
 	try {
-		const res = await fetch(`${blogApi}/api/likes/${encodeURIComponent(postId)}`, {
+		const res = await fetch(`${blogApi}/api/stats/${encodeURIComponent(postId)}`, {
 			credentials: 'omit',
 			headers: { Accept: 'application/json' },
 		});
 
-		return res.ok ? await res.json() : { liked: false, count: 0 };
+		return res.ok ? await res.json() : { contentId: postId, likes: 0, visits: 0, liked: false };
 	} catch {
-		return { liked: false, count: 0 };
+		return { contentId: postId, likes: 0, visits: 0, liked: false };
 	}
 }
 
 export async function likePost() {
 	try {
-		const res = await fetch(`${blogApi}/api/likes/${encodeURIComponent(postId)}`, {
+		const res = await fetch(`${blogApi}/api/like/${encodeURIComponent(postId)}`, {
 			method: 'POST',
 			credentials: 'omit',
 			headers: { Accept: 'application/json' },

@@ -10,11 +10,13 @@ type AppEnv = Env & CommentsEnv & {
 	SECRET_SALT?: string;
 };
 
-// Normalize paths into simple postId values to avoid ambiguous routes or odd input.
+// Normalize paths into simple contentId values to avoid ambiguous routes or odd input.
 const POST_ID_PATTERN = /^[a-z0-9](?:[a-z0-9:-]{0,118}[a-z0-9])?$/;
-const LIKES_API_ROUTE_PATTERN = /^\/api\/likes\/(.+)$/;
+const LIKE_API_ROUTE_PATTERN = /^\/api\/like\/(.+)$/;
+const STATS_API_ROUTE_PATTERN = /^\/api\/stats\/(.+)$/;
 const COMMENTS_API_ROUTE_PATTERN = /^\/api\/comments\/(.+)$/;
 const ALLOWED_METHODS = 'GET, POST, OPTIONS';
+const VISIT_DEDUPE_TTL_SECONDS = 24 * 60 * 60;
 
 export default {
 	async fetch(request, env) {
@@ -44,9 +46,21 @@ export default {
 				return jsonResponse(request, allowedOrigins, result.body, result.status);
 			}
 
-			const postId = getContentId(url, LIKES_API_ROUTE_PATTERN);
+			if (url.pathname === '/api/stats/' || url.pathname === '/api/stats') {
+				if (request.method !== 'GET') {
+					return jsonResponse(request, allowedOrigins, { error: 'Method not allowed' }, 405, {
+						Allow: 'GET, OPTIONS',
+					});
+				}
 
-			if (!postId) {
+				return jsonResponse(request, allowedOrigins, { stats: await getAllStats(env.DB) });
+			}
+
+			const contentId =
+				getContentId(url, LIKE_API_ROUTE_PATTERN) ??
+				getContentId(url, STATS_API_ROUTE_PATTERN);
+
+			if (!contentId) {
 				return jsonResponse(request, allowedOrigins, { error: 'Not found' }, 404);
 			}
 
@@ -61,23 +75,47 @@ export default {
 				return jsonResponse(request, allowedOrigins, { error: 'Visitor address unavailable' }, 400);
 			}
 
-			if (request.method === 'GET') {
-				const [liked, count] = await Promise.all([
-					hasLiked(env.DB, postId, visitorHash),
-					getCount(env.DB, postId),
+			const now = Math.floor(Date.now() / 1000);
+			const routeType = getRouteType(url);
+
+			if (routeType === 'stats') {
+				if (request.method !== 'GET') {
+					return jsonResponse(request, allowedOrigins, { error: 'Method not allowed' }, 405, {
+						Allow: 'GET, OPTIONS',
+					});
+				}
+
+				const [liked, stats] = await Promise.all([
+					hasActiveDedupe(env.DB, 'like', contentId, visitorHash, now),
+					recordInteraction(
+						env.DB,
+						'visit',
+						contentId,
+						visitorHash,
+						now,
+						now + VISIT_DEDUPE_TTL_SECONDS,
+					),
 				]);
 
-				return jsonResponse(request, allowedOrigins, { liked, count });
+				return jsonResponse(request, allowedOrigins, {
+					contentId,
+					likes: stats.likes,
+					visits: stats.visits,
+					liked,
+				});
 			}
 
-			// POST records the like. The SQL helper dedupes through the
-			// (post_id, visitor_hash) primary key, so repeated clicks do not duplicate.
-			if (request.method === 'POST') {
-				await env.DB.prepare(SQL.insertLike)
-					.bind(postId, visitorHash, Math.floor(Date.now() / 1000))
-					.run();
+			if (routeType === 'like') {
+				if (request.method === 'POST') {
+					const stats = await recordInteraction(env.DB, 'like', contentId, visitorHash, now, getLikeExpiresAt());
 
-				return jsonResponse(request, allowedOrigins, { liked: true, count: await getCount(env.DB, postId) });
+					return jsonResponse(request, allowedOrigins, {
+						contentId,
+						likes: stats.likes,
+						visits: stats.visits,
+						liked: true,
+					});
+				}
 			}
 
 			return jsonResponse(request, allowedOrigins, { error: 'Method not allowed' }, 405, {
@@ -112,6 +150,13 @@ function getContentId(url: URL, routePattern: RegExp) {
 		.replaceAll('/', '-');
 
 	return POST_ID_PATTERN.test(postId) ? postId : undefined;
+}
+
+function getRouteType(url: URL) {
+	if (LIKE_API_ROUTE_PATTERN.test(url.pathname)) return 'like';
+	if (STATS_API_ROUTE_PATTERN.test(url.pathname)) return 'stats';
+
+	return undefined;
 }
 
 function getAllowedOrigins(env: AppEnv) {
@@ -190,24 +235,76 @@ async function getVisitorHash(request: Request, secretSalt: string) {
 	return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-// Checks whether this visitor already has a like for this post.
-async function hasLiked(db: D1Database, postId: string, visitorHash: string) {
+type InteractionType = 'like' | 'visit';
+
+type ContentStats = {
+	contentId: string;
+	likes: number;
+	visits: number;
+};
+
+// Checks whether this visitor has an active dedupe record for this content.
+async function hasActiveDedupe(
+	db: D1Database,
+	type: InteractionType,
+	contentId: string,
+	visitorHash: string,
+	now: number,
+) {
 	const row = await db
-		.prepare(SQL.selectExistingLike)
-		.bind(postId, visitorHash)
+		.prepare(type === 'like' ? SQL.selectActiveLikeDedupe : SQL.selectActiveVisitDedupe)
+		.bind(contentId, visitorHash, now)
 		.first();
 
 	return row !== null;
 }
 
-// Counts all likes recorded for a post.
-async function getCount(db: D1Database, postId: string) {
-	const row = await db
-		.prepare(SQL.countLikes)
-		.bind(postId)
-		.first<{ count: number }>();
+async function recordInteraction(
+	db: D1Database,
+	type: InteractionType,
+	contentId: string,
+	visitorHash: string,
+	now: number,
+	expiresAt: number,
+) {
+	const deleteExpiredDedupe = type === 'like' ? SQL.deleteExpiredLikeDedupe : SQL.deleteExpiredVisitDedupe;
+	const insertDedupe = type === 'like' ? SQL.insertLikeDedupe : SQL.insertVisitDedupe;
+	const incrementCounter = type === 'like' ? SQL.incrementLikesByClaim : SQL.incrementVisitsByClaim;
 
-	return Number(row?.count ?? 0);
+	const results = await db.batch([
+		db.prepare(deleteExpiredDedupe).bind(contentId, visitorHash, now),
+		db.prepare(SQL.ensureContentStats).bind(contentId),
+		db.prepare(insertDedupe).bind(contentId, visitorHash, expiresAt),
+		db.prepare(incrementCounter).bind(contentId),
+		db.prepare(SQL.selectContentStats).bind(contentId),
+	]);
+
+	return mapStats(results.at(-1)?.results?.[0], contentId);
+}
+
+async function getAllStats(db: D1Database) {
+	const rows = await db
+		.prepare(SQL.selectAllContentStats)
+		.all<ContentStats>();
+
+	return rows.results.map((row) => mapStats(row, row.contentId));
+}
+
+function mapStats(row: unknown, contentId: string): ContentStats {
+	const stats = typeof row === 'object' && row !== null ? row as Partial<ContentStats> : undefined;
+
+	return {
+		contentId,
+		likes: Number(stats?.likes ?? 0),
+		visits: Number(stats?.visits ?? 0),
+	};
+}
+
+function getLikeExpiresAt() {
+	const now = new Date();
+	const nextYear = Date.UTC(now.getUTCFullYear() + 1, 0, 1, 0, 0, 0, 0);
+
+	return Math.floor(nextYear / 1000);
 }
 
 // Converts any captured error into safe text for structured logs.
